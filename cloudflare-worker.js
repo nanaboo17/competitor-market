@@ -34,17 +34,6 @@ const EXTRACTION_SCHEMA = {
   ],
 }
 
-function dataUrlToBytes(dataUrl) {
-  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/)
-  if (!match) throw new Error('Invalid image data URL')
-
-  const binary = atob(match[2])
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-  return Array.from(bytes)
-}
 
 function corsHeaders(request) {
   return {
@@ -170,8 +159,6 @@ Rules:
 `.trim()
 
   try {
-    const image = dataUrlToBytes(body.image)
-
     const result = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
       messages: [
         {
@@ -183,7 +170,7 @@ Rules:
           content: prompt,
         },
       ],
-      image,
+      image: body.image,
       response_format: {
         type: 'json_schema',
         json_schema: EXTRACTION_SCHEMA,
