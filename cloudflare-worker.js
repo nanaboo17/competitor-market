@@ -167,18 +167,53 @@ Rules:
 `.trim()
 
   try {
-    const result = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+    const imageBase64 = extractBase64Image(body.image)
+
+    // Stage 1: vision/OCR only. Do not constrain this call to JSON.
+    const visionResult = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
       messages: [
         {
           role: 'system',
-          content: 'You are an OCR and structured extraction assistant. Extract only visible facts.',
+          content: 'You are an OCR assistant for Indonesian telecom advertisements. Read every visible word, number, package, price, speed, promotion, validity period, and contact number from the image. Preserve the text faithfully.',
         },
         {
           role: 'user',
-          content: prompt,
+          content: 'Transcribe and summarize all visible information in this advertisement. Include every package tier, speed, price, promo term, and contact number.',
         },
       ],
-      image: extractBase64Image(body.image),
+      image: imageBase64,
+      chat_template_kwargs: {
+        enable_thinking: false,
+      },
+    })
+
+    const ocrCandidate =
+      visionResult?.response ??
+      visionResult?.choices?.[0]?.message?.content ??
+      visionResult?.result ??
+      ''
+
+    const ocrText =
+      typeof ocrCandidate === 'string'
+        ? ocrCandidate.trim()
+        : JSON.stringify(ocrCandidate ?? '')
+
+    if (!ocrText) {
+      return json(request, normalizeExtraction({}))
+    }
+
+    // Stage 2: convert OCR text to the exact app schema.
+    const structuredResult = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+      messages: [
+        {
+          role: 'system',
+          content: 'Extract structured broadband-offer data from OCR text. Use only facts present in the OCR. Return the requested JSON schema.',
+        },
+        {
+          role: 'user',
+          content: `OCR text from poster:\n\n${ocrText}\n\nIf there are multiple package tiers, use the lowest-priced entry package for package_name, speed_mbps, and price_amount. Put the remaining tiers and bundling details in promo_text.`,
+        },
+      ],
       response_format: {
         type: 'json_schema',
         json_schema: EXTRACTION_SCHEMA,
@@ -188,27 +223,53 @@ Rules:
       },
     })
 
-    const candidate =
-      result?.response ??
-      result?.choices?.[0]?.message?.content ??
-      result?.result ??
-      result
+    let candidate =
+      structuredResult?.response ??
+      structuredResult?.choices?.[0]?.message?.content ??
+      structuredResult?.result ??
+      structuredResult
 
     if (typeof candidate === 'string') {
       try {
-        const parsed = JSON.parse(stripCodeFence(candidate))
-        return json(request, normalizeExtraction(parsed))
+        candidate = JSON.parse(stripCodeFence(candidate))
       } catch {
-        return json(request, normalizeExtraction({ raw_ocr_text: candidate }))
+        candidate = {}
       }
     }
 
-    const structured =
-      candidate && typeof candidate === 'object' && candidate.response && typeof candidate.response === 'object'
-        ? candidate.response
-        : candidate
+    if (candidate && typeof candidate === 'object' && candidate.response && typeof candidate.response === 'object') {
+      candidate = candidate.response
+    }
 
-    return json(request, normalizeExtraction(structured))
+    const normalized = normalizeExtraction(candidate)
+    normalized.raw_ocr_text = normalized.raw_ocr_text || ocrText
+
+    // Deterministic fallback for common fields when the structured call omits them.
+    if (!normalized.competitor_name) {
+      const competitorMatch = ocrText.match(/\b(Biznet(?:\s+Home)?|IndiHome|MyRepublic|First\s+Media|CBN|ICONNET)\b/i)
+      if (competitorMatch) normalized.competitor_name = competitorMatch[1]
+    }
+
+    if (normalized.speed_mbps == null) {
+      const speeds = [...ocrText.matchAll(/(\d{2,4})\s*Mbps/gi)]
+        .map((m) => Number(m[1]))
+        .filter((n) => Number.isFinite(n))
+      if (speeds.length) normalized.speed_mbps = Math.min(...speeds)
+    }
+
+    if (normalized.price_amount == null) {
+      const prices = [...ocrText.matchAll(/Rp\s*([0-9][0-9.]{3,})/gi)]
+        .map((m) => Number(m[1].replace(/\./g, '')))
+        .filter((n) => Number.isFinite(n))
+      if (prices.length) normalized.price_amount = Math.min(...prices)
+    }
+
+    if (!normalized.contact_number) {
+      const phoneMatch = ocrText.match(/\b0\d{2,3}[-\s]?\d{3,4}[-\s]?\d{3,4}\b/)
+      if (phoneMatch) normalized.contact_number = phoneMatch[0].replace(/\s+/g, '')
+    }
+
+    return json(request, normalized)
   } catch (error) {
     return json(
       request,
