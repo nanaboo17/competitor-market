@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "competitor-market-ai",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-25",
+  "ai": {
+    "binding": "AI"
+  },
+  "vars": {
+    "SUPABASE_URL": "https://gsnrsprnbgeejmkghrkn.supabase.co",
+    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_kMb0WtlTtODQJNgQTiWDEQ_TWxAtjqs"
+  }
+}
