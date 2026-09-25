@@ -27,6 +27,7 @@ export default function ReportForm() {
   const [aiBusy, setAiBusy] = useState(false)
   const [aiMessage, setAiMessage] = useState('')
   const [saving, setSaving] = useState(false)
+  const [saveStage, setSaveStage] = useState('')
   const [error, setError] = useState('')
   const [form, setForm] = useState({
     competitor_id: '',
@@ -89,6 +90,7 @@ export default function ReportForm() {
     setPreview(URL.createObjectURL(picked))
     setError('')
     setAiMessage('')
+    setAiExtraction(null)
 
     if (aiEnabled) {
       setAiBusy(true)
@@ -133,6 +135,7 @@ export default function ReportForm() {
     if (!location) return setError('GPS location is required. Tap Retry GPS and allow location access.')
 
     setSaving(true)
+    setSaveStage('Checking session…')
     setError('')
 
     try {
@@ -140,14 +143,16 @@ export default function ReportForm() {
       if (userError || !userData.user) throw new Error('Your session is no longer valid. Please sign in again.')
 
       const reportId = crypto.randomUUID()
+      setSaveStage('Uploading photo…')
       const ext = (file.name.split('.').pop() || 'jpg').toLowerCase()
       const path = `${userData.user.id}/${reportId}/poster.${ext}`
 
       const { error: uploadError } = await supabase.storage
         .from('competitor-posters')
         .upload(path, file, { cacheControl: '3600', upsert: false, contentType: file.type })
-      if (uploadError) throw uploadError
+      if (uploadError) throw new Error(`Photo upload failed: ${uploadError.message}`)
 
+      setSaveStage('Saving report…')
       const payload = {
         id: reportId,
         agent_id: userData.user.id,
@@ -176,14 +181,16 @@ export default function ReportForm() {
       const { error: insertError } = await supabase.from('competitor_reports').insert(payload)
       if (insertError) {
         await supabase.storage.from('competitor-posters').remove([path])
-        throw insertError
+        throw new Error(`Report save failed: ${insertError.message}`)
       }
 
+      setSaveStage('Saved successfully')
       navigate('/reports', { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit report.')
     } finally {
       setSaving(false)
+      setSaveStage('')
     }
   }
 
@@ -205,7 +212,7 @@ export default function ReportForm() {
               <div className="meta">Accuracy ±{Math.round(location.accuracy)} m</div>
               {accuracyQuality && <span className={`quality ${accuracyQuality.className}`}>{accuracyQuality.label}</span>}
             </div>
-          ) : <div className="empty-inline">Capturing GPS…</div>}
+          ) : <div className="empty-inline">{locationError ? 'GPS unavailable — tap Retry GPS.' : 'Capturing GPS…'}</div>}
           {locationError && <div className="error-box">{locationError}</div>}
         </div>
 
@@ -278,7 +285,8 @@ export default function ReportForm() {
         </div>
 
         {error && <div className="error-box">{error}</div>}
-        <button className="button primary wide sticky-submit" disabled={saving || aiBusy}>{saving ? 'Submitting…' : 'Submit report'}</button>
+        {saving && saveStage && <div className="ai-box">{saveStage}</div>}
+        <button className="button primary wide sticky-submit" disabled={saving}>{saving ? 'Submitting…' : aiBusy ? 'Submit manually while AI runs' : 'Submit report'}</button>
       </form>
     </section>
   )
