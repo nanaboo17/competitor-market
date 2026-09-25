@@ -68,6 +68,11 @@ async function authenticate(request) {
   }
 }
 
+function extractBase64Image(value) {
+  const match = value.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/s)
+  return match ? match[1] : value
+}
+
 function stripCodeFence(value) {
   return value
     .replace(/^\s*```(?:json)?\s*/i, '')
@@ -155,6 +160,9 @@ Rules:
 - speed_mbps must be Mbps.
 - confidence values must be between 0 and 1.
 - Use null when a field is not clearly visible.
+- If the poster contains multiple package tiers, use the lowest-priced/entry package for package_name, speed_mbps, and price_amount.
+- Put the other visible package tiers and prices into promo_text so no useful offer data is lost.
+- raw_ocr_text should contain all important readable text from the poster, including all package tiers and contact information.
 - Do not include markdown fences or commentary.
 `.trim()
 
@@ -170,7 +178,7 @@ Rules:
           content: prompt,
         },
       ],
-      image: body.image,
+      image: extractBase64Image(body.image),
       response_format: {
         type: 'json_schema',
         json_schema: EXTRACTION_SCHEMA,
