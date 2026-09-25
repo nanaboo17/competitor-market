@@ -107,6 +107,48 @@ function normalizeExtraction(value) {
   }
 }
 
+function parseOcrLocally(ocrText) {
+  const result = normalizeExtraction({ raw_ocr_text: ocrText })
+
+  const competitorMatch = ocrText.match(/\b(Biznet(?:\s+Home)?|IndiHome|MyRepublic|First\s+Media|CBN|ICONNET)\b/i)
+  if (competitorMatch) result.competitor_name = competitorMatch[1]
+
+  const speeds = [...ocrText.matchAll(/(\d{2,4})\s*Mbps/gi)]
+    .map((m) => Number(m[1]))
+    .filter((n) => Number.isFinite(n))
+  if (speeds.length) result.speed_mbps = Math.min(...speeds)
+
+  const prices = [...ocrText.matchAll(/Rp\s*([0-9][0-9.]{3,})/gi)]
+    .map((m) => Number(m[1].replace(/\./g, '')))
+    .filter((n) => Number.isFinite(n))
+  if (prices.length) result.price_amount = Math.min(...prices)
+
+  const phoneMatch = ocrText.match(/\b0\d{2,3}[-\s]?\d{3,4}[-\s]?\d{3,4}\b/)
+  if (phoneMatch) result.contact_number = phoneMatch[0].replace(/\s+/g, '')
+
+  const packageMatch =
+    ocrText.match(/(?:Paket\s+)?(Biznet\s+Home\s+[0-9]+D)\b/i) ||
+    ocrText.match(/\b(Paket\s+[^\n]{3,60})/i)
+  if (packageMatch) result.package_name = packageMatch[1].trim()
+
+  const promoLines = ocrText
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => /promo|gratis|bundling|hemat|langganan|discount|diskon/i.test(line))
+  if (promoLines.length) result.promo_text = promoLines.join(' | ')
+  else result.promo_text = ocrText.slice(0, 1000)
+
+  const confidence = {}
+  if (result.competitor_name) confidence.competitor_name = 0.9
+  if (result.package_name) confidence.package_name = 0.75
+  if (result.speed_mbps != null) confidence.speed_mbps = 0.9
+  if (result.price_amount != null) confidence.price_amount = 0.9
+  if (result.contact_number) confidence.contact_number = 0.9
+  result.confidence = confidence
+
+  return result
+}
+
 async function analyze(request, env) {
   if (request.method !== 'POST') {
     return json(request, { error: 'Method not allowed' }, { status: 405 })
@@ -169,22 +211,23 @@ Rules:
   try {
     const imageBase64 = extractBase64Image(body.image)
 
-    // Stage 1: vision/OCR only. Do not constrain this call to JSON.
+    // One vision call only for speed. Parse the OCR locally afterwards.
     const visionResult = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
       messages: [
         {
           role: 'system',
-          content: 'You are an OCR assistant for Indonesian telecom advertisements. Read every visible word, number, package, price, speed, promotion, validity period, and contact number from the image. Preserve the text faithfully.',
+          content: 'You are a fast OCR assistant for Indonesian telecom advertisements. Transcribe visible text faithfully. Do not explain or reason.',
         },
         {
           role: 'user',
-          content: 'Transcribe and summarize all visible information in this advertisement. Include every package tier, speed, price, promo term, and contact number.',
+          content: 'Read this poster. Return plain text only. Preserve package names, internet speeds, prices, promo terms, dates, and contact numbers. Put separate offer lines on separate lines.',
         },
       ],
       image: imageBase64,
       chat_template_kwargs: {
         enable_thinking: false,
       },
+      max_tokens: 700,
     })
 
     const ocrCandidate =
@@ -202,74 +245,7 @@ Rules:
       return json(request, normalizeExtraction({}))
     }
 
-    // Stage 2: convert OCR text to the exact app schema.
-    const structuredResult = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
-      messages: [
-        {
-          role: 'system',
-          content: 'Extract structured broadband-offer data from OCR text. Use only facts present in the OCR. Return the requested JSON schema.',
-        },
-        {
-          role: 'user',
-          content: `OCR text from poster:\n\n${ocrText}\n\nIf there are multiple package tiers, use the lowest-priced entry package for package_name, speed_mbps, and price_amount. Put the remaining tiers and bundling details in promo_text.`,
-        },
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: EXTRACTION_SCHEMA,
-      },
-      chat_template_kwargs: {
-        enable_thinking: false,
-      },
-    })
-
-    let candidate =
-      structuredResult?.response ??
-      structuredResult?.choices?.[0]?.message?.content ??
-      structuredResult?.result ??
-      structuredResult
-
-    if (typeof candidate === 'string') {
-      try {
-        candidate = JSON.parse(stripCodeFence(candidate))
-      } catch {
-        candidate = {}
-      }
-    }
-
-    if (candidate && typeof candidate === 'object' && candidate.response && typeof candidate.response === 'object') {
-      candidate = candidate.response
-    }
-
-    const normalized = normalizeExtraction(candidate)
-    normalized.raw_ocr_text = normalized.raw_ocr_text || ocrText
-
-    // Deterministic fallback for common fields when the structured call omits them.
-    if (!normalized.competitor_name) {
-      const competitorMatch = ocrText.match(/\b(Biznet(?:\s+Home)?|IndiHome|MyRepublic|First\s+Media|CBN|ICONNET)\b/i)
-      if (competitorMatch) normalized.competitor_name = competitorMatch[1]
-    }
-
-    if (normalized.speed_mbps == null) {
-      const speeds = [...ocrText.matchAll(/(\d{2,4})\s*Mbps/gi)]
-        .map((m) => Number(m[1]))
-        .filter((n) => Number.isFinite(n))
-      if (speeds.length) normalized.speed_mbps = Math.min(...speeds)
-    }
-
-    if (normalized.price_amount == null) {
-      const prices = [...ocrText.matchAll(/Rp\s*([0-9][0-9.]{3,})/gi)]
-        .map((m) => Number(m[1].replace(/\./g, '')))
-        .filter((n) => Number.isFinite(n))
-      if (prices.length) normalized.price_amount = Math.min(...prices)
-    }
-
-    if (!normalized.contact_number) {
-      const phoneMatch = ocrText.match(/\b0\d{2,3}[-\s]?\d{3,4}[-\s]?\d{3,4}\b/)
-      if (phoneMatch) normalized.contact_number = phoneMatch[0].replace(/\s+/g, '')
-    }
-
-    return json(request, normalized)
+    return json(request, parseOcrLocally(ocrText))
   } catch (error) {
     return json(
       request,
