@@ -126,7 +126,11 @@ export default function ReportForm() {
     }
 
     setAiExtraction(result)
-    const match = competitors.find((c) => c.name.toLowerCase() === result.competitor_name?.toLowerCase())
+    const detected = result.competitor_name?.trim().toLowerCase() ?? ''
+    const match = competitors.find((c) => {
+      const name = c.name.trim().toLowerCase()
+      return detected === name || detected.includes(name) || name.includes(detected)
+    })
     setForm((current) => ({
       ...current,
       competitor_id: match?.id ?? current.competitor_id,
@@ -141,7 +145,20 @@ export default function ReportForm() {
       contact_number: result.contact_number ?? current.contact_number,
       raw_ocr_text: result.raw_ocr_text ?? current.raw_ocr_text,
     }))
-    setAiMessage(`AI extracted ${extractedValues.length} field${extractedValues.length === 1 ? '' : 's'}. Please review the values before submitting.`)
+    const extractedNames = [
+      result.competitor_name ? 'competitor' : '',
+      result.package_name ? 'package' : '',
+      result.speed_mbps != null ? 'speed' : '',
+      result.price_amount != null ? 'price' : '',
+      result.promo_text ? 'promotion' : '',
+      result.valid_until ? 'valid until' : '',
+      result.installation_fee != null ? 'installation fee' : '',
+      result.contract_months != null ? 'contract' : '',
+      result.contact_number ? 'contact' : '',
+      result.raw_ocr_text ? 'OCR text' : '',
+    ].filter(Boolean)
+
+    setAiMessage(`AI filled ${extractedNames.length} field${extractedNames.length === 1 ? '' : 's'}: ${extractedNames.join(', ')}. Please review before submitting.`)
   }
 
   function field(name: keyof typeof form, value: string) {
