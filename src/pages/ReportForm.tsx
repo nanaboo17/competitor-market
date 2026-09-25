@@ -45,7 +45,7 @@ export default function ReportForm() {
   })
   const [aiExtraction, setAiExtraction] = useState<AIExtraction | null>(null)
 
-  const aiEnabled = Boolean(import.meta.env.VITE_AI_API_URL)
+  const aiEnabled = true
 
   useEffect(() => {
     supabase.from('competitors').select('id,name').eq('active', true).order('name').then(({ data }) => {
