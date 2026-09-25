@@ -76,3 +76,11 @@ textarea { min-height:92px; resize:vertical; }
   .hero-card { padding:22px; border-radius:20px; }
   .hero-card h2 { font-size:28px; }
 }
+
+.google-button { width:100%; margin:18px 0 6px; background:#fff; color:#242428; border:1px solid #dcdce2; gap:10px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+.google-button:hover { background:#fafafa; }
+.google-button:disabled { opacity:.65; cursor:not-allowed; }
+.google-mark { width:22px; height:22px; border-radius:50%; border:1px solid #d6d6dc; display:inline-grid; place-items:center; font-size:13px; font-weight:900; }
+.auth-divider { display:flex; align-items:center; gap:10px; color:#8a8a93; font-size:12px; margin:12px 0 14px; }
+.auth-divider::before, .auth-divider::after { content:''; height:1px; background:#e7e7eb; flex:1; }
+.auth-divider span { white-space:nowrap; }
