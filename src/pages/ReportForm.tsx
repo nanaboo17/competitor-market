@@ -106,6 +106,25 @@ export default function ReportForm() {
   }
 
   function applyAI(result: AIExtraction) {
+    const extractedValues = [
+      result.competitor_name,
+      result.package_name,
+      result.speed_mbps,
+      result.price_amount,
+      result.promo_text,
+      result.valid_until,
+      result.installation_fee,
+      result.contract_months,
+      result.contact_number,
+      result.raw_ocr_text,
+    ].filter((value) => value !== null && value !== undefined && value !== '')
+
+    if (extractedValues.length === 0) {
+      setAiExtraction(null)
+      setAiMessage('AI responded, but no readable poster details were extracted. Please try a clearer/closer photo or fill the fields manually.')
+      return
+    }
+
     setAiExtraction(result)
     const match = competitors.find((c) => c.name.toLowerCase() === result.competitor_name?.toLowerCase())
     setForm((current) => ({
@@ -122,7 +141,7 @@ export default function ReportForm() {
       contact_number: result.contact_number ?? current.contact_number,
       raw_ocr_text: result.raw_ocr_text ?? current.raw_ocr_text,
     }))
-    setAiMessage('AI extraction complete. Please review the values before submitting.')
+    setAiMessage(`AI extracted ${extractedValues.length} field${extractedValues.length === 1 ? '' : 's'}. Please review the values before submitting.`)
   }
 
   function field(name: keyof typeof form, value: string) {
