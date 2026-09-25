@@ -68,22 +68,6 @@ async function authenticate(request) {
   }
 }
 
-function dataUrlToBlob(value) {
-  const match = value.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s)
-  if (!match) throw new Error('Invalid image data URL')
-
-  const binary = atob(match[2])
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-
-  return {
-    blob: new Blob([bytes], { type: match[1] }),
-    mimeType: match[1],
-  }
-}
-
 function extractBase64Image(value) {
   const match = value.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/s)
   return match ? match[1] : value
@@ -230,37 +214,94 @@ Rules:
 `.trim()
 
   try {
-    const { blob, mimeType } = dataUrlToBlob(body.image)
-    const extension =
-      mimeType === 'image/png' ? 'png' :
-      mimeType === 'image/webp' ? 'webp' :
-      'jpg'
+    const visionResult = await env.AI.run(
+      '@cf/google/gemma-4-26b-a4b-it',
+      {
+        messages: [
+          {
+            role: 'system',
+            content: 'You extract fields from Indonesian internet-provider advertisement posters. Read the image carefully. Do not infer information that is not visible. Return concise plain text only.',
+          },
+          {
+            role: 'user',
+            content: `Read this poster and return exactly these lines:
+COMPETITOR: <brand or blank>
+PACKAGE: <entry/lowest-priced package name or blank>
+SPEED_MBPS: <entry package speed number only or blank>
+PRICE_IDR: <entry package price number only, no punctuation, or blank>
+PROMOTION: <all visible promo/bundling details in one line or blank>
+VALID_UNTIL: <YYYY-MM-DD only if explicitly shown, otherwise blank>
+INSTALLATION_FEE_IDR: <number only if explicitly shown, otherwise blank>
+CONTRACT_MONTHS: <single mandatory contract length only if clearly shown, otherwise blank>
+CONTACT: <visible phone/WhatsApp number or blank>
+OCR: <important visible text, including all package tiers and prices>
 
-    const converted = await env.AI.toMarkdown(
-      {
-        name: `poster.${extension}`,
-        blob,
-      },
-      {
-        conversionOptions: {
-          output: { format: 'text' },
+If several packages are shown, choose the lowest-priced package for PACKAGE, SPEED_MBPS, and PRICE_IDR, but keep all other package tiers in OCR and PROMOTION where relevant.`,
+          },
+        ],
+        image: body.image,
+        max_tokens: 900,
+        temperature: 0.1,
+        chat_template_kwargs: {
+          enable_thinking: false,
         },
       },
+      { rejectIfBusy: true },
     )
 
-    const conversion = Array.isArray(converted) ? converted[0] : converted
+    const candidate =
+      visionResult?.response ??
+      visionResult?.choices?.[0]?.message?.content ??
+      visionResult?.result ??
+      ''
 
-    if (!conversion || conversion.format === 'error') {
-      throw new Error(conversion?.error || 'Image text extraction failed')
-    }
+    const text =
+      typeof candidate === 'string'
+        ? candidate.trim()
+        : JSON.stringify(candidate ?? '')
 
-    const ocrText = typeof conversion.data === 'string' ? conversion.data.trim() : ''
-
-    if (!ocrText) {
+    if (!text) {
       return json(request, normalizeExtraction({}))
     }
 
-    return json(request, parseOcrLocally(ocrText))
+    const lineValue = (key) => {
+      const match = text.match(new RegExp(`^${key}\\s*:\\s*(.*)$`, 'im'))
+      return match ? match[1].trim() : ''
+    }
+
+    const numberValue = (key) => {
+      const raw = lineValue(key).replace(/[^0-9]/g, '')
+      return raw ? Number(raw) : null
+    }
+
+    const result = normalizeExtraction({
+      competitor_name: lineValue('COMPETITOR') || null,
+      package_name: lineValue('PACKAGE') || null,
+      speed_mbps: numberValue('SPEED_MBPS'),
+      price_amount: numberValue('PRICE_IDR'),
+      promo_text: lineValue('PROMOTION') || null,
+      valid_until: lineValue('VALID_UNTIL') || null,
+      installation_fee: numberValue('INSTALLATION_FEE_IDR'),
+      contract_months: numberValue('CONTRACT_MONTHS'),
+      contact_number: lineValue('CONTACT') || null,
+      raw_ocr_text: lineValue('OCR') || text,
+      confidence: {},
+    })
+
+    // Fallback to generic local parsing if the model misses any easy fields.
+    const fallback = parseOcrLocally(result.raw_ocr_text || text)
+    for (const key of [
+      'competitor_name',
+      'package_name',
+      'speed_mbps',
+      'price_amount',
+      'promo_text',
+      'contact_number',
+    ]) {
+      if (result[key] == null || result[key] === '') result[key] = fallback[key]
+    }
+
+    return json(request, result)
   } catch (error) {
     return json(
       request,
