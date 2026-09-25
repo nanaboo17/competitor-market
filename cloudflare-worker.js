@@ -1,0 +1,173 @@
+const SUPABASE_URL = 'https://ynrwjaxkzlzbcuwaamix.supabase.co'
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_AtMK3rTp1kVkhULgABDYqQ_-BkPLVT1'
+
+async function authenticate(request) {
+  const authorization = request.headers.get('Authorization')
+  if (!authorization?.startsWith('Bearer ')) return false
+
+  try {
+    const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        Authorization: authorization,
+        apikey: SUPABASE_PUBLISHABLE_KEY,
+      },
+    })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+function stripCodeFence(value) {
+  return value
+    .replace(/^\s*```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .trim()
+}
+
+function normalizeExtraction(value) {
+  const defaults = {
+    competitor_name: null,
+    package_name: null,
+    speed_mbps: null,
+    price_amount: null,
+    promo_text: null,
+    valid_until: null,
+    installation_fee: null,
+    contract_months: null,
+    contact_number: null,
+    raw_ocr_text: null,
+    confidence: {},
+  }
+
+  if (!value || typeof value !== 'object') return defaults
+
+  return {
+    ...defaults,
+    ...value,
+    confidence:
+      value.confidence && typeof value.confidence === 'object'
+        ? value.confidence
+        : {},
+  }
+}
+
+async function analyze(request, env) {
+  if (request.method !== 'POST') {
+    return Response.json({ error: 'Method not allowed' }, { status: 405 })
+  }
+
+  if (!(await authenticate(request))) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const body = await request.json().catch(() => null)
+  if (!body?.image || typeof body.image !== 'string') {
+    return Response.json({ error: 'Missing image data' }, { status: 400 })
+  }
+
+  if (!env.AI) {
+    return Response.json({ error: 'Workers AI binding is not configured' }, { status: 500 })
+  }
+
+  const prompt = `
+Analyze this Indonesian telecom or fixed-broadband competitor advertisement image.
+
+Perform OCR and extract ONLY information that is visible in the image. Do not infer missing values.
+
+Return ONLY valid JSON with exactly these fields:
+{
+  "competitor_name": string|null,
+  "package_name": string|null,
+  "speed_mbps": number|null,
+  "price_amount": number|null,
+  "promo_text": string|null,
+  "valid_until": "YYYY-MM-DD"|null,
+  "installation_fee": number|null,
+  "contract_months": number|null,
+  "contact_number": string|null,
+  "raw_ocr_text": string|null,
+  "confidence": {
+    "competitor_name": number,
+    "package_name": number,
+    "speed_mbps": number,
+    "price_amount": number,
+    "promo_text": number,
+    "valid_until": number,
+    "installation_fee": number,
+    "contract_months": number,
+    "contact_number": number
+  }
+}
+
+Rules:
+- price_amount and installation_fee must be numeric IDR values without punctuation.
+- speed_mbps must be Mbps.
+- confidence values must be between 0 and 1.
+- Use null when a field is not clearly visible.
+- Do not include markdown fences or commentary.
+`.trim()
+
+  try {
+    const result = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an OCR and structured extraction assistant. Return JSON only.',
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      image: body.image,
+      chat_template_kwargs: {
+        enable_thinking: false,
+      },
+    })
+
+    const candidate =
+      result?.choices?.[0]?.message?.content ??
+      result?.response ??
+      result?.result ??
+      result
+
+    if (typeof candidate === 'string') {
+      try {
+        const parsed = JSON.parse(stripCodeFence(candidate))
+        return Response.json(normalizeExtraction(parsed))
+      } catch {
+        return Response.json(
+          normalizeExtraction({ raw_ocr_text: candidate }),
+        )
+      }
+    }
+
+    return Response.json(normalizeExtraction(candidate))
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : 'AI extraction failed' },
+      { status: 500 },
+    )
+  }
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url)
+
+    if (url.pathname === '/api/health') {
+      return Response.json({
+        ok: true,
+        service: 'competitor-market',
+        ai: Boolean(env.AI),
+      })
+    }
+
+    if (url.pathname === '/api/analyze') {
+      return analyze(request, env)
+    }
+
+    return env.ASSETS.fetch(request)
+  },
+}
