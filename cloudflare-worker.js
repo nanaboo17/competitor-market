@@ -1,6 +1,22 @@
 const SUPABASE_URL = 'https://ynrwjaxkzlzbcuwaamix.supabase.co'
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_AtMK3rTp1kVkhULgABDYqQ_-BkPLVT1'
 
+function corsHeaders(request) {
+  return {
+    'Access-Control-Allow-Origin': request.headers.get('Origin') || '*',
+    'Access-Control-Allow-Headers': 'authorization, content-type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Vary': 'Origin',
+  }
+}
+
+function json(request, data, init = {}) {
+  return Response.json(data, {
+    ...init,
+    headers: { ...corsHeaders(request), ...(init.headers || {}) },
+  })
+}
+
 async function authenticate(request) {
   const authorization = request.headers.get('Authorization')
   if (!authorization?.startsWith('Bearer ')) return false
@@ -54,20 +70,20 @@ function normalizeExtraction(value) {
 
 async function analyze(request, env) {
   if (request.method !== 'POST') {
-    return Response.json({ error: 'Method not allowed' }, { status: 405 })
+    return json(request, { error: 'Method not allowed' }, { status: 405 })
   }
 
   if (!(await authenticate(request))) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 })
+    return json(request, { error: 'Unauthorized' }, { status: 401 })
   }
 
   const body = await request.json().catch(() => null)
   if (!body?.image || typeof body.image !== 'string') {
-    return Response.json({ error: 'Missing image data' }, { status: 400 })
+    return json(request, { error: 'Missing image data' }, { status: 400 })
   }
 
   if (!env.AI) {
-    return Response.json({ error: 'Workers AI binding is not configured' }, { status: 500 })
+    return json(request, { error: 'Workers AI binding is not configured' }, { status: 500 })
   }
 
   const prompt = `
@@ -135,17 +151,16 @@ Rules:
     if (typeof candidate === 'string') {
       try {
         const parsed = JSON.parse(stripCodeFence(candidate))
-        return Response.json(normalizeExtraction(parsed))
+        return json(request, normalizeExtraction(parsed))
       } catch {
-        return Response.json(
-          normalizeExtraction({ raw_ocr_text: candidate }),
-        )
+        return json(request, normalizeExtraction({ raw_ocr_text: candidate }))
       }
     }
 
-    return Response.json(normalizeExtraction(candidate))
+    return json(request, normalizeExtraction(candidate))
   } catch (error) {
-    return Response.json(
+    return json(
+      request,
       { error: error instanceof Error ? error.message : 'AI extraction failed' },
       { status: 500 },
     )
@@ -156,8 +171,12 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url)
 
+    if (request.method === 'OPTIONS' && url.pathname.startsWith('/api/')) {
+      return new Response(null, { status: 204, headers: corsHeaders(request) })
+    }
+
     if (url.pathname === '/api/health') {
-      return Response.json({
+      return json(request, {
         ok: true,
         service: 'competitor-market',
         ai: Boolean(env.AI),
