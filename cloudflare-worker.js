@@ -68,6 +68,22 @@ async function authenticate(request) {
   }
 }
 
+function dataUrlToBlob(value) {
+  const match = value.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s)
+  if (!match) throw new Error('Invalid image data URL')
+
+  const binary = atob(match[2])
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+
+  return {
+    blob: new Blob([bytes], { type: match[1] }),
+    mimeType: match[1],
+  }
+}
+
 function extractBase64Image(value) {
   const match = value.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/s)
   return match ? match[1] : value
@@ -214,37 +230,31 @@ Rules:
 `.trim()
 
   try {
-    const imageBase64 = extractBase64Image(body.image)
+    const { blob, mimeType } = dataUrlToBlob(body.image)
+    const extension =
+      mimeType === 'image/png' ? 'png' :
+      mimeType === 'image/webp' ? 'webp' :
+      'jpg'
 
-    // One vision call only for speed. Parse the OCR locally afterwards.
-    const visionResult = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a fast OCR assistant for Indonesian telecom advertisements. Transcribe visible text faithfully. Do not explain or reason.',
-        },
-        {
-          role: 'user',
-          content: 'Read this poster. Return plain text only. Preserve package names, internet speeds, prices, promo terms, dates, and contact numbers. Put separate offer lines on separate lines.',
-        },
-      ],
-      image: imageBase64,
-      chat_template_kwargs: {
-        enable_thinking: false,
+    const converted = await env.AI.toMarkdown(
+      {
+        name: `poster.${extension}`,
+        blob,
       },
-      max_tokens: 700,
-    })
+      {
+        conversionOptions: {
+          output: { format: 'text' },
+        },
+      },
+    )
 
-    const ocrCandidate =
-      visionResult?.response ??
-      visionResult?.choices?.[0]?.message?.content ??
-      visionResult?.result ??
-      ''
+    const conversion = Array.isArray(converted) ? converted[0] : converted
 
-    const ocrText =
-      typeof ocrCandidate === 'string'
-        ? ocrCandidate.trim()
-        : JSON.stringify(ocrCandidate ?? '')
+    if (!conversion || conversion.format === 'error') {
+      throw new Error(conversion?.error || 'Image text extraction failed')
+    }
+
+    const ocrText = typeof conversion.data === 'string' ? conversion.data.trim() : ''
 
     if (!ocrText) {
       return json(request, normalizeExtraction({}))
