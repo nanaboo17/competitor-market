@@ -11,15 +11,12 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 export async function analyzePoster(file: File): Promise<AIExtraction | null> {
-  const apiUrl = import.meta.env.VITE_AI_API_URL as string | undefined
-  if (!apiUrl) return null
-
   const { data: sessionData } = await supabase.auth.getSession()
   const token = sessionData.session?.access_token
   if (!token) throw new Error('Your session has expired. Please sign in again.')
 
   const image = await fileToDataUrl(file)
-  const response = await fetch(apiUrl, {
+  const response = await fetch('/api/analyze', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -28,10 +25,22 @@ export async function analyzePoster(file: File): Promise<AIExtraction | null> {
     body: JSON.stringify({ image }),
   })
 
-  if (!response.ok) {
-    const message = await response.text()
-    throw new Error(message || 'AI extraction failed')
+  const raw = await response.text()
+  let payload: unknown = null
+
+  try {
+    payload = raw ? JSON.parse(raw) : null
+  } catch {
+    payload = null
   }
 
-  return (await response.json()) as AIExtraction
+  if (!response.ok) {
+    const message =
+      payload && typeof payload === 'object' && 'error' in payload
+        ? String((payload as { error?: unknown }).error || 'AI extraction failed')
+        : raw || 'AI extraction failed'
+    throw new Error(message)
+  }
+
+  return payload as AIExtraction
 }
