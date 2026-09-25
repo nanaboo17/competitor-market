@@ -1,6 +1,51 @@
 const SUPABASE_URL = 'https://ynrwjaxkzlzbcuwaamix.supabase.co'
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_AtMK3rTp1kVkhULgABDYqQ_-BkPLVT1'
 
+const EXTRACTION_SCHEMA = {
+  type: 'object',
+  properties: {
+    competitor_name: { type: ['string', 'null'] },
+    package_name: { type: ['string', 'null'] },
+    speed_mbps: { type: ['number', 'null'] },
+    price_amount: { type: ['number', 'null'] },
+    promo_text: { type: ['string', 'null'] },
+    valid_until: { type: ['string', 'null'] },
+    installation_fee: { type: ['number', 'null'] },
+    contract_months: { type: ['number', 'null'] },
+    contact_number: { type: ['string', 'null'] },
+    raw_ocr_text: { type: ['string', 'null'] },
+    confidence: {
+      type: 'object',
+      additionalProperties: { type: 'number' },
+    },
+  },
+  required: [
+    'competitor_name',
+    'package_name',
+    'speed_mbps',
+    'price_amount',
+    'promo_text',
+    'valid_until',
+    'installation_fee',
+    'contract_months',
+    'contact_number',
+    'raw_ocr_text',
+    'confidence',
+  ],
+}
+
+function dataUrlToBytes(dataUrl) {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/)
+  if (!match) throw new Error('Invalid image data URL')
+
+  const binary = atob(match[2])
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return Array.from(bytes)
+}
+
 function corsHeaders(request) {
   return {
     'Access-Control-Allow-Origin': request.headers.get('Origin') || '*',
@@ -125,26 +170,32 @@ Rules:
 `.trim()
 
   try {
+    const image = dataUrlToBytes(body.image)
+
     const result = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
       messages: [
         {
           role: 'system',
-          content: 'You are an OCR and structured extraction assistant. Return JSON only.',
+          content: 'You are an OCR and structured extraction assistant. Extract only visible facts.',
         },
         {
           role: 'user',
           content: prompt,
         },
       ],
-      image: body.image,
+      image,
+      response_format: {
+        type: 'json_schema',
+        json_schema: EXTRACTION_SCHEMA,
+      },
       chat_template_kwargs: {
         enable_thinking: false,
       },
     })
 
     const candidate =
-      result?.choices?.[0]?.message?.content ??
       result?.response ??
+      result?.choices?.[0]?.message?.content ??
       result?.result ??
       result
 
@@ -157,7 +208,12 @@ Rules:
       }
     }
 
-    return json(request, normalizeExtraction(candidate))
+    const structured =
+      candidate && typeof candidate === 'object' && candidate.response && typeof candidate.response === 'object'
+        ? candidate.response
+        : candidate
+
+    return json(request, normalizeExtraction(structured))
   } catch (error) {
     return json(
       request,
