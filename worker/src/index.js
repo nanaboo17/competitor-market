@@ -26,7 +26,7 @@ function cors(origin) {
   return {
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Headers': 'authorization, content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Vary': 'Origin',
   }
 }
@@ -47,11 +47,28 @@ async function authenticate(request, env) {
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '*'
+
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: cors(origin) })
     }
+
+    if (request.method === 'GET') {
+      return Response.json(
+        {
+          ok: true,
+          service: 'competitor-market-ai',
+          message: 'Worker is running. Use POST / for poster analysis.',
+          supabase_project: 'market-research',
+        },
+        { status: 200, headers: cors(origin) },
+      )
+    }
+
     if (request.method !== 'POST') {
-      return Response.json({ error: 'Method not allowed' }, { status: 405, headers: cors(origin) })
+      return Response.json(
+        { error: 'Method not allowed', allowed_methods: ['GET', 'POST', 'OPTIONS'] },
+        { status: 405, headers: cors(origin) },
+      )
     }
 
     if (!(await authenticate(request, env))) {
