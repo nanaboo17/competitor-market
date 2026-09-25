@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AppShell from './components/AppShell'
 import { supabase } from './lib/supabase'
 import Home from './pages/Home'
@@ -24,7 +24,7 @@ export default function App() {
   if (session === undefined) return <div className="loading-screen">Loading…</div>
 
   return (
-    <BrowserRouter>
+    <HashRouter>
       <Routes>
         <Route path="/login" element={<Login session={session} />} />
         <Route element={<Protected session={session} />}>
@@ -34,6 +34,6 @@ export default function App() {
         </Route>
         <Route path="*" element={<Navigate to={session ? '/' : '/login'} replace />} />
       </Routes>
-    </BrowserRouter>
+    </HashRouter>
   )
 }
