@@ -123,7 +123,7 @@ function parseOcrLocally(ocrText) {
     .filter((n) => Number.isFinite(n))
   if (prices.length) result.price_amount = Math.min(...prices)
 
-  const phoneMatch = ocrText.match(/\b0\d{2,3}[-\s]?\d{3,4}[-\s]?\d{3,4}\b/)
+  const phoneMatch = ocrText.match(/\b0\d{2,3}(?:[-\s]?\d{3,4}){2,3}\b/)
   if (phoneMatch) result.contact_number = phoneMatch[0].replace(/\s+/g, '')
 
   const packageMatch =
@@ -134,9 +134,14 @@ function parseOcrLocally(ocrText) {
   const promoLines = ocrText
     .split(/\n+/)
     .map((line) => line.trim())
+    .filter(Boolean)
     .filter((line) => /promo|gratis|bundling|hemat|langganan|discount|diskon/i.test(line))
-  if (promoLines.length) result.promo_text = promoLines.join(' | ')
-  else result.promo_text = ocrText.slice(0, 1000)
+
+  const durationPromos = [...ocrText.matchAll(/(?:langganan\s*)?(\d{1,2})\s*bulan[^\n,.]*?gratis\s*(\d{1,2})\s*bulan/gi)]
+    .map((m) => `Langganan ${m[1]} bulan Gratis ${m[2]} bulan`)
+
+  const promoParts = [...new Set([...promoLines, ...durationPromos])]
+  if (promoParts.length) result.promo_text = promoParts.join(' | ')
 
   const confidence = {}
   if (result.competitor_name) confidence.competitor_name = 0.9
