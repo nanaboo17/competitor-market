@@ -694,3 +694,24 @@ textarea { min-height:104px; resize:vertical; line-height:1.5; }
   .auth-card { padding:24px 20px; border-radius:20px; }
   .auth-card h2 { font-size:27px; }
 }
+
+.analysis-row { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.analysis-row > span:first-child { flex:1; min-width:0; }
+.analysis-badge {
+  flex:0 0 auto;
+  display:inline-flex;
+  align-items:center;
+  min-height:24px;
+  padding:4px 8px;
+  border-radius:999px;
+  font-size:9px;
+  font-weight:900;
+  letter-spacing:.04em;
+  white-space:nowrap;
+}
+.analysis-badge.ocr { background:#eaf7ef; color:#176b3a; }
+.analysis-badge.ai { background:#eee9ff; color:#5a45a4; }
+.analysis-badge.hybrid { background:#fff0f6; color:#c71359; }
+@media (max-width:520px) {
+  .analysis-row { flex-direction:column; }
+}
