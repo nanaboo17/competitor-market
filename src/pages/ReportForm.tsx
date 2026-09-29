@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { analyzePoster } from '../lib/ai'
+import { countUsefulFields, runTesseract } from '../lib/ocr'
 import { getCurrentLocation } from '../lib/geo'
 import { supabase } from '../lib/supabase'
 import type { AIExtraction, Competitor } from '../lib/types'
@@ -85,27 +86,71 @@ export default function ReportForm() {
       setError('Photo must be 10 MB or smaller.')
       return
     }
+
     if (preview) URL.revokeObjectURL(preview)
     setFile(picked)
     setPreview(URL.createObjectURL(picked))
     setError('')
-    setAiMessage('')
+    setAiMessage('Preparing local OCR…')
     setAiExtraction(null)
+    setAiBusy(true)
 
-    if (aiEnabled) {
-      setAiBusy(true)
-      try {
-        const result = await analyzePoster(picked)
-        if (result) applyAI(result)
-      } catch (err) {
-        setAiMessage(`AI could not analyze this image. You can still submit manually. ${err instanceof Error ? err.message : ''}`)
-      } finally {
-        setAiBusy(false)
+    try {
+      const ocrResult = await runTesseract(picked, (progress) => {
+        const percent = Math.max(1, Math.round(progress * 100))
+        setAiMessage(`Reading poster locally… ${percent}%`)
+      })
+
+      const ocrFields = countUsefulFields(ocrResult)
+      applyExtraction(ocrResult, 'OCR')
+
+      if (!aiEnabled || ocrFields >= 4) {
+        setAiMessage(
+          `OCR filled ${ocrFields} useful field${ocrFields === 1 ? '' : 's'}. Please review before submitting.`,
+        )
+        return
       }
+
+      setAiMessage(
+        `OCR found ${ocrFields} useful field${ocrFields === 1 ? '' : 's'}. AI is checking the missing details…`,
+      )
+
+      try {
+        const aiResult = await analyzePoster(picked)
+        if (aiResult) {
+          applyExtraction(aiResult, 'AI', true)
+          const aiFields = countUsefulFields(aiResult)
+          setAiMessage(
+            `OCR + AI completed. AI recovered ${aiFields} useful field${aiFields === 1 ? '' : 's'}. Please review the values.`,
+          )
+        }
+      } catch (aiError) {
+        setAiMessage(
+          `OCR completed. AI fallback was unavailable, but you can review and submit the OCR result. ${aiError instanceof Error ? aiError.message : ''}`,
+        )
+      }
+    } catch (ocrError) {
+      if (aiEnabled) {
+        setAiMessage('Local OCR failed. Trying AI fallback…')
+        try {
+          const aiResult = await analyzePoster(picked)
+          if (aiResult) applyExtraction(aiResult, 'AI')
+        } catch (aiError) {
+          setAiMessage(
+            `Could not analyze this image automatically. You can still fill the fields manually. ${aiError instanceof Error ? aiError.message : ''}`,
+          )
+        }
+      } else {
+        setAiMessage(
+          `Local OCR failed. You can still fill the fields manually. ${ocrError instanceof Error ? ocrError.message : ''}`,
+        )
+      }
+    } finally {
+      setAiBusy(false)
     }
   }
 
-  function applyAI(result: AIExtraction) {
+  function applyExtraction(result: AIExtraction, source: 'OCR' | 'AI', onlyEmpty = false) {
     const extractedValues = [
       result.competitor_name,
       result.package_name,
@@ -131,20 +176,43 @@ export default function ReportForm() {
       const name = c.name.trim().toLowerCase()
       return detected === name || detected.includes(name) || name.includes(detected)
     })
-    setForm((current) => ({
-      ...current,
-      competitor_id: match?.id ?? current.competitor_id,
-      competitor_name_detected: result.competitor_name ?? current.competitor_name_detected,
-      package_name: result.package_name ?? current.package_name,
-      speed_mbps: result.speed_mbps != null ? String(result.speed_mbps) : current.speed_mbps,
-      price_amount: result.price_amount != null ? String(result.price_amount) : current.price_amount,
-      promo_text: result.promo_text ?? current.promo_text,
-      valid_until: result.valid_until ?? current.valid_until,
-      installation_fee: result.installation_fee != null ? String(result.installation_fee) : current.installation_fee,
-      contract_months: result.contract_months != null ? String(result.contract_months) : current.contract_months,
-      contact_number: result.contact_number ?? current.contact_number,
-      raw_ocr_text: result.raw_ocr_text ?? current.raw_ocr_text,
-    }))
+    setForm((current) => {
+      const choose = (existing: string, incoming: string | null | undefined) => {
+        if (incoming == null || incoming === '') return existing
+        if (onlyEmpty && existing) return existing
+        return incoming
+      }
+
+      return {
+        ...current,
+        competitor_id:
+          onlyEmpty && current.competitor_id
+            ? current.competitor_id
+            : match?.id ?? current.competitor_id,
+        competitor_name_detected: choose(current.competitor_name_detected, result.competitor_name),
+        package_name: choose(current.package_name, result.package_name),
+        speed_mbps: choose(
+          current.speed_mbps,
+          result.speed_mbps != null ? String(result.speed_mbps) : null,
+        ),
+        price_amount: choose(
+          current.price_amount,
+          result.price_amount != null ? String(result.price_amount) : null,
+        ),
+        promo_text: choose(current.promo_text, result.promo_text),
+        valid_until: choose(current.valid_until, result.valid_until),
+        installation_fee: choose(
+          current.installation_fee,
+          result.installation_fee != null ? String(result.installation_fee) : null,
+        ),
+        contract_months: choose(
+          current.contract_months,
+          result.contract_months != null ? String(result.contract_months) : null,
+        ),
+        contact_number: choose(current.contact_number, result.contact_number),
+        raw_ocr_text: choose(current.raw_ocr_text, result.raw_ocr_text),
+      }
+    })
     const extractedNames = [
       result.competitor_name ? 'competitor' : '',
       result.package_name ? 'package' : '',
@@ -158,7 +226,7 @@ export default function ReportForm() {
       result.raw_ocr_text ? 'OCR text' : '',
     ].filter(Boolean)
 
-    setAiMessage(`AI filled ${extractedNames.length} field${extractedNames.length === 1 ? '' : 's'}: ${extractedNames.join(', ')}. Please review before submitting.`)
+    setAiMessage(`${source} filled ${extractedNames.length} field${extractedNames.length === 1 ? '' : 's'}: ${extractedNames.join(', ')}. Please review before submitting.`)
   }
 
   function field(name: keyof typeof form, value: string) {
@@ -234,7 +302,7 @@ export default function ReportForm() {
     <section>
       <p className="eyebrow">NEW SIGHTING</p>
       <h2>Report competitor</h2>
-      <p className="muted">Capture the evidence first. AI is only used to pre-fill fields; you remain the final reviewer.</p>
+      <p className="muted">Capture the evidence first. Local OCR fills the obvious fields, then AI only helps when details are still missing.</p>
 
       <form onSubmit={submit} className="stack top-gap">
         <div className="panel">
@@ -258,7 +326,7 @@ export default function ReportForm() {
             {preview ? <img src={preview} alt="Poster preview" /> : <><strong>Take photo / upload image</strong><span>JPG, PNG or WebP · max 10 MB</span></>}
             <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={chooseFile} />
           </label>
-          {aiBusy && <div className="ai-box">AI is reading the poster…</div>}
+          {aiBusy && !aiMessage && <div className="ai-box">Analyzing poster…</div>}
           {aiMessage && <div className="ai-box">{aiMessage}</div>}
           {!aiEnabled && <div className="muted small-copy">AI is optional and currently disabled until you deploy the included Cloudflare Worker and set VITE_AI_API_URL.</div>}
         </div>
@@ -322,7 +390,7 @@ export default function ReportForm() {
 
         {error && <div className="error-box">{error}</div>}
         {saving && saveStage && <div className="ai-box">{saveStage}</div>}
-        <button className="button primary wide sticky-submit" disabled={saving}>{saving ? 'Submitting…' : aiBusy ? 'Submit manually while AI runs' : 'Submit report'}</button>
+        <button className="button primary wide sticky-submit" disabled={saving}>{saving ? 'Submitting…' : aiBusy ? 'Submit while analysis runs' : 'Submit report'}</button>
       </form>
     </section>
   )
