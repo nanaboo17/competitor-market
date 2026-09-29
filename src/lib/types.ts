@@ -38,6 +38,8 @@ export type Report = {
   contact_number: string | null
   notes: string | null
   ai_status: string
+  ai_extraction?: Record<string, unknown> | null
+  ai_confidence?: Record<string, number> | null
   captured_at: string
   created_at: string
   competitors?: { name: string } | null
