@@ -27,6 +27,7 @@ export default function ReportForm() {
   const [locationError, setLocationError] = useState('')
   const [aiBusy, setAiBusy] = useState(false)
   const [aiMessage, setAiMessage] = useState('')
+  const [analysisSource, setAnalysisSource] = useState<'none' | 'ocr' | 'ai' | 'hybrid'>('none')
   const [saving, setSaving] = useState(false)
   const [saveStage, setSaveStage] = useState('')
   const [error, setError] = useState('')
@@ -93,6 +94,7 @@ export default function ReportForm() {
     setError('')
     setAiMessage('Preparing local OCR…')
     setAiExtraction(null)
+    setAnalysisSource('none')
     setAiBusy(true)
 
     try {
@@ -113,6 +115,7 @@ export default function ReportForm() {
       const needsAi = shouldUseAiFallback(ocrResult)
 
       applyExtraction(ocrResult, 'OCR')
+      setAnalysisSource('ocr')
 
       if (!aiEnabled || !needsAi) {
         setAiMessage(
@@ -129,6 +132,7 @@ export default function ReportForm() {
         const aiResult = await analyzePoster(picked)
         if (aiResult) {
           applyExtraction(aiResult, 'AI', true)
+          setAnalysisSource('hybrid')
           const aiFields = countUsefulFields(aiResult)
           setAiMessage(
             `OCR + AI completed. AI recovered ${aiFields} useful field${aiFields === 1 ? '' : 's'}. Please review the values.`,
@@ -144,7 +148,10 @@ export default function ReportForm() {
         setAiMessage('Local OCR failed. Trying AI fallback…')
         try {
           const aiResult = await analyzePoster(picked)
-          if (aiResult) applyExtraction(aiResult, 'AI')
+          if (aiResult) {
+            applyExtraction(aiResult, 'AI')
+            setAnalysisSource('ai')
+          }
         } catch (aiError) {
           setAiMessage(
             `Could not analyze this image automatically. You can still fill the fields manually. ${aiError instanceof Error ? aiError.message : ''}`,
@@ -337,7 +344,22 @@ export default function ReportForm() {
             <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={chooseFile} />
           </label>
           {aiBusy && !aiMessage && <div className="ai-box">Analyzing poster…</div>}
-          {aiMessage && <div className="ai-box">{aiMessage}</div>}
+          {aiMessage && (
+            <div className="ai-box analysis-box">
+              <div className="analysis-row">
+                <span>{aiMessage}</span>
+                {analysisSource !== 'none' && (
+                  <span className={'analysis-badge ' + analysisSource}>
+                    {analysisSource === 'ocr'
+                      ? 'OCR'
+                      : analysisSource === 'ai'
+                        ? 'AI'
+                        : 'OCR + AI'}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
           {!aiEnabled && <div className="muted small-copy">AI is optional and currently disabled until you deploy the included Cloudflare Worker and set VITE_AI_API_URL.</div>}
         </div>
 
