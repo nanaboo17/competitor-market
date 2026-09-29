@@ -1,7 +1,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { analyzePoster } from '../lib/ai'
-import { countUsefulFields, runTesseract } from '../lib/ocr'
+import { countUsefulFields, runTesseract, shouldUseAiFallback } from '../lib/ocr'
 import { getCurrentLocation } from '../lib/geo'
 import { supabase } from '../lib/supabase'
 import type { AIExtraction, Competitor } from '../lib/types'
@@ -96,23 +96,33 @@ export default function ReportForm() {
     setAiBusy(true)
 
     try {
-      const ocrResult = await runTesseract(picked, (progress) => {
-        const percent = Math.max(1, Math.round(progress * 100))
-        setAiMessage(`Reading poster locally… ${percent}%`)
+      const ocrResult = await runTesseract(picked, (progress, stage) => {
+        const percent = Math.max(1, Math.min(100, Math.round(progress * 100)))
+        const label =
+          stage === 'preprocessing'
+            ? 'Optimizing image…'
+            : stage === 'retrying'
+              ? 'Improving OCR contrast…'
+              : 'Reading poster locally…'
+
+        setAiMessage(`${label} ${percent}%`)
       })
 
       const ocrFields = countUsefulFields(ocrResult)
+      const ocrConfidence = Math.round((ocrResult.confidence?.ocr ?? 0) * 100)
+      const needsAi = shouldUseAiFallback(ocrResult)
+
       applyExtraction(ocrResult, 'OCR')
 
-      if (!aiEnabled || ocrFields >= 4) {
+      if (!aiEnabled || !needsAi) {
         setAiMessage(
-          `OCR filled ${ocrFields} useful field${ocrFields === 1 ? '' : 's'}. Please review before submitting.`,
+          `OCR completed with ${ocrConfidence}% confidence and filled ${ocrFields} useful field${ocrFields === 1 ? '' : 's'}. Please review before submitting.`,
         )
         return
       }
 
       setAiMessage(
-        `OCR found ${ocrFields} useful field${ocrFields === 1 ? '' : 's'}. AI is checking the missing details…`,
+        `OCR completed with ${ocrConfidence}% confidence and found ${ocrFields} useful field${ocrFields === 1 ? '' : 's'}. AI is checking missing details…`,
       )
 
       try {
@@ -165,12 +175,12 @@ export default function ReportForm() {
     ].filter((value) => value !== null && value !== undefined && value !== '')
 
     if (extractedValues.length === 0) {
-      setAiExtraction(null)
-      setAiMessage('AI responded, but no readable poster details were extracted. Please try a clearer/closer photo or fill the fields manually.')
+      if (source === 'AI') setAiExtraction(null)
+      setAiMessage(`${source} returned no readable poster details. Try a clearer/closer photo or fill the fields manually.`)
       return
     }
 
-    setAiExtraction(result)
+    if (source === 'AI') setAiExtraction(result)
     const detected = result.competitor_name?.trim().toLowerCase() ?? ''
     const match = competitors.find((c) => {
       const name = c.name.trim().toLowerCase()
