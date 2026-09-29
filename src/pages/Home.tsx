@@ -95,7 +95,7 @@ export default function Home() {
           </div>
         )}
         {reports.map((r) => (
-          <article className="report-card" key={r.id}>
+          <Link className="report-card report-card-link" key={r.id} to={"/reports/" + r.id}>
             <div className="report-brand-mark">
               {(r.competitors?.name || r.competitor_name_detected || '?').slice(0, 1).toUpperCase()}
             </div>
@@ -111,7 +111,7 @@ export default function Home() {
               </div>
               <div className="meta">{new Date(r.created_at).toLocaleString('id-ID')}</div>
             </div>
-          </article>
+          </Link>
         ))}
       </div>
     </>
