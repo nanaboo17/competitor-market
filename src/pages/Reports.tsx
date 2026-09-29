@@ -85,7 +85,7 @@ export default function Reports() {
           </div>
         )}
         {filtered.map((r) => (
-          <article className="report-card report-card-detailed" key={r.id}>
+          <Link className="report-card report-card-detailed report-card-link" key={r.id} to={"/reports/" + r.id}>
             <div className="report-brand-mark">
               {(r.competitors?.name || r.competitor_name_detected || '?').slice(0, 1).toUpperCase()}
             </div>
@@ -109,7 +109,7 @@ export default function Reports() {
                 <span>{r.latitude.toFixed(5)}, {r.longitude.toFixed(5)}</span>
               </div>
             </div>
-          </article>
+          </Link>
         ))}
       </div>
     </section>
