@@ -7,6 +7,7 @@ import Home from './pages/Home'
 import Login from './pages/Login'
 import ReportForm from './pages/ReportForm'
 import Reports from './pages/Reports'
+import ReportDetail from './pages/ReportDetail'
 
 function Protected({ session }: { session: Session | null }) {
   return session ? <AppShell /> : <Navigate to="/login" replace />
@@ -31,6 +32,7 @@ export default function App() {
           <Route index element={<Home />} />
           <Route path="report" element={<ReportForm />} />
           <Route path="reports" element={<Reports />} />
+          <Route path="reports/:id" element={<ReportDetail />} />
         </Route>
         <Route path="*" element={<Navigate to={session ? '/' : '/login'} replace />} />
       </Routes>
