@@ -129,13 +129,15 @@ export default function ReportForm() {
       )
 
       try {
-        const aiResult = await analyzePoster(picked)
+        const aiResult = await analyzePoster(picked, ocrResult.raw_ocr_text)
         if (aiResult) {
           applyExtraction(aiResult, 'AI', true)
           setAnalysisSource('hybrid')
           const aiFields = countUsefulFields(aiResult)
           setAiMessage(
-            `OCR + AI completed. AI recovered ${aiFields} useful field${aiFields === 1 ? '' : 's'}. Please review the values.`,
+            aiFields > 0
+              ? `OCR + AI completed. AI confirmed/recovered ${aiFields} useful field${aiFields === 1 ? '' : 's'}. Please review the values.`
+              : `OCR completed. AI could not add more fields, so the OCR values were kept. Please review before submitting.`,
           )
         }
       } catch (aiError) {
