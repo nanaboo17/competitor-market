@@ -51,7 +51,12 @@ function fileToDataUrl(file: Blob): Promise<string> {
   })
 }
 
-async function callAnalyze(url: string, token: string, image: string) {
+async function callAnalyze(
+  url: string,
+  token: string,
+  image: string,
+  ocrText?: string | null,
+) {
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), AI_TIMEOUT_MS)
 
@@ -62,7 +67,7 @@ async function callAnalyze(url: string, token: string, image: string) {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ image }),
+      body: JSON.stringify({ image, ocr_text: ocrText || null }),
       signal: controller.signal,
     })
   } finally {
@@ -78,7 +83,10 @@ function parseResponse(raw: string) {
   }
 }
 
-export async function analyzePoster(file: File): Promise<AIExtraction | null> {
+export async function analyzePoster(
+  file: File,
+  ocrText?: string | null,
+): Promise<AIExtraction | null> {
   const { data: sessionData } = await supabase.auth.getSession()
   const token = sessionData.session?.access_token
   if (!token) throw new Error('Your session has expired. Please sign in again.')
@@ -88,14 +96,14 @@ export async function analyzePoster(file: File): Promise<AIExtraction | null> {
   let response: Response
 
   try {
-    response = await callAnalyze('/api/analyze', token, image)
+    response = await callAnalyze('/api/analyze', token, image, ocrText)
   } catch (sameOriginError) {
     try {
-      response = await callAnalyze(FALLBACK_AI_URL, token, image)
+      response = await callAnalyze(FALLBACK_AI_URL, token, image, ocrText)
     } catch (fallbackError) {
       const timedOut =
-        sameOriginError instanceof DOMException && sameOriginError.name === 'AbortError' ||
-        fallbackError instanceof DOMException && fallbackError.name === 'AbortError'
+        (sameOriginError instanceof DOMException && sameOriginError.name === 'AbortError') ||
+        (fallbackError instanceof DOMException && fallbackError.name === 'AbortError')
 
       if (timedOut) {
         throw new Error('AI analysis timed out. OCR results are still available for review.')
