@@ -4,6 +4,7 @@ import App from './App'
 import './styles.css'
 import './form-polish.css'
 import './funky.css'
+import './features.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
