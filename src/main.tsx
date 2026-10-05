@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import './styles.css'
 import './form-polish.css'
+import './funky.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
