@@ -92,7 +92,7 @@ export default function ReportForm() {
     setFile(picked)
     setPreview(URL.createObjectURL(picked))
     setError('')
-    setAiMessage('Preparing local OCR…')
+    setAiMessage('Preparing image…')
     setAiExtraction(null)
     setAnalysisSource('none')
     setAiBusy(true)
@@ -102,10 +102,10 @@ export default function ReportForm() {
         const percent = Math.max(1, Math.min(100, Math.round(progress * 100)))
         const label =
           stage === 'preprocessing'
-            ? 'Optimizing image…'
+            ? 'Preparing image…'
             : stage === 'retrying'
-              ? 'Improving OCR contrast…'
-              : 'Reading poster locally…'
+              ? 'Improving readability…'
+              : 'Reading poster…'
 
         setAiMessage(`${label} ${percent}%`)
       })
@@ -119,13 +119,13 @@ export default function ReportForm() {
 
       if (!aiEnabled || !needsAi) {
         setAiMessage(
-          `OCR completed with ${ocrConfidence}% confidence and filled ${ocrFields} useful field${ocrFields === 1 ? '' : 's'}. Please review before submitting.`,
+          `Auto-fill completed with ${ocrConfidence}% reading confidence and filled ${ocrFields} useful field${ocrFields === 1 ? '' : 's'}. Please review before submitting.`,
         )
         return
       }
 
       setAiMessage(
-        `OCR completed with ${ocrConfidence}% confidence and found ${ocrFields} useful field${ocrFields === 1 ? '' : 's'}. AI is checking missing details…`,
+        `Auto-fill found ${ocrFields} useful field${ocrFields === 1 ? '' : 's'}. Checking missing details…`,
       )
 
       try {
@@ -136,18 +136,18 @@ export default function ReportForm() {
           const aiFields = countUsefulFields(aiResult)
           setAiMessage(
             aiFields > 0
-              ? `OCR + AI completed. AI confirmed/recovered ${aiFields} useful field${aiFields === 1 ? '' : 's'}. Please review the values.`
-              : `OCR completed. AI could not add more fields, so the OCR values were kept. Please review before submitting.`,
+              ? `Auto-fill completed. ${aiFields} field${aiFields === 1 ? '' : 's'} were confirmed or recovered. Please review the values.`
+              : `Auto-fill completed. No additional fields were found, so the existing values were kept.`,
           )
         }
       } catch (aiError) {
         setAiMessage(
-          `OCR completed. AI fallback was unavailable, but you can review and submit the OCR result. ${aiError instanceof Error ? aiError.message : ''}`,
+          `Auto-fill completed with the available data. You can review and submit the result. ${aiError instanceof Error ? aiError.message : ''}`,
         )
       }
     } catch (ocrError) {
       if (aiEnabled) {
-        setAiMessage('Local OCR failed. Trying AI fallback…')
+        setAiMessage('Automatic reading was incomplete. Checking the image again…')
         try {
           const aiResult = await analyzePoster(picked)
           if (aiResult) {
@@ -156,12 +156,12 @@ export default function ReportForm() {
           }
         } catch (aiError) {
           setAiMessage(
-            `Could not analyze this image automatically. You can still fill the fields manually. ${aiError instanceof Error ? aiError.message : ''}`,
+            `Could not fill this image automatically. You can still complete the fields manually. ${aiError instanceof Error ? aiError.message : ''}`,
           )
         }
       } else {
         setAiMessage(
-          `Local OCR failed. You can still fill the fields manually. ${ocrError instanceof Error ? ocrError.message : ''}`,
+          `Automatic reading failed. You can still complete the fields manually. ${ocrError instanceof Error ? ocrError.message : ''}`,
         )
       }
     } finally {
@@ -185,7 +185,7 @@ export default function ReportForm() {
 
     if (extractedValues.length === 0) {
       if (source === 'AI') setAiExtraction(null)
-      setAiMessage(`${source} returned no readable poster details. Try a clearer/closer photo or fill the fields manually.`)
+      setAiMessage('No readable poster details were found. Try a clearer photo or fill the fields manually.')
       return
     }
 
@@ -232,20 +232,6 @@ export default function ReportForm() {
         raw_ocr_text: choose(current.raw_ocr_text, result.raw_ocr_text),
       }
     })
-    const extractedNames = [
-      result.competitor_name ? 'competitor' : '',
-      result.package_name ? 'package' : '',
-      result.speed_mbps != null ? 'speed' : '',
-      result.price_amount != null ? 'price' : '',
-      result.promo_text ? 'promotion' : '',
-      result.valid_until ? 'valid until' : '',
-      result.installation_fee != null ? 'installation fee' : '',
-      result.contract_months != null ? 'contract' : '',
-      result.contact_number ? 'contact' : '',
-      result.raw_ocr_text ? 'OCR text' : '',
-    ].filter(Boolean)
-
-    setAiMessage(`${source} filled ${extractedNames.length} field${extractedNames.length === 1 ? '' : 's'}: ${extractedNames.join(', ')}. Please review before submitting.`)
   }
 
   function field(name: keyof typeof form, value: string) {
@@ -321,7 +307,7 @@ export default function ReportForm() {
     <section>
       <p className="eyebrow">NEW SIGHTING</p>
       <h2>Report competitor</h2>
-      <p className="muted">Capture the evidence first. Local OCR fills the obvious fields, then AI only helps when details are still missing.</p>
+      <p className="muted">Add a photo, confirm the location, then review the details before submitting.</p>
 
       <form onSubmit={submit} className="stack top-gap">
         <div className="panel">
@@ -342,27 +328,20 @@ export default function ReportForm() {
         <div className="panel">
           <div className="panel-title-row"><div><span className="step">2</span><strong> Poster photo</strong></div></div>
           <label className="camera-drop">
-            {preview ? <img src={preview} alt="Poster preview" /> : <><strong>Take photo / upload image</strong><span>JPG, PNG or WebP · max 10 MB</span></>}
+            {preview ? <img src={preview} alt="Poster preview" /> : <><strong>Take photo or upload image</strong><span>JPG, PNG or WebP · max 10 MB</span></>}
             <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={chooseFile} />
           </label>
-          {aiBusy && !aiMessage && <div className="ai-box">Analyzing poster…</div>}
+          {aiBusy && !aiMessage && <div className="ai-box">Reading image…</div>}
           {aiMessage && (
             <div className="ai-box analysis-box">
               <div className="analysis-row">
                 <span>{aiMessage}</span>
                 {analysisSource !== 'none' && (
-                  <span className={'analysis-badge ' + analysisSource}>
-                    {analysisSource === 'ocr'
-                      ? 'OCR'
-                      : analysisSource === 'ai'
-                        ? 'AI'
-                        : 'OCR + AI'}
-                  </span>
+                  <span className={'analysis-badge ' + analysisSource}>Auto-fill</span>
                 )}
               </div>
             </div>
           )}
-          {!aiEnabled && <div className="muted small-copy">AI is optional and currently disabled until you deploy the included Cloudflare Worker and set VITE_AI_API_URL.</div>}
         </div>
 
         <div className="panel">
@@ -382,21 +361,21 @@ export default function ReportForm() {
           </div>
 
           <label>Detected competitor name
-            <input value={form.competitor_name_detected} onChange={(e) => field('competitor_name_detected', e.target.value)} placeholder="e.g. MyRepublic" />
+            <input value={form.competitor_name_detected} onChange={(e) => field('competitor_name_detected', e.target.value)} placeholder="e.g. Nethome.id" />
           </label>
           <label>Package name
-            <input value={form.package_name} onChange={(e) => field('package_name', e.target.value)} placeholder="e.g. Internet Unlimited" />
+            <input value={form.package_name} onChange={(e) => field('package_name', e.target.value)} placeholder="e.g. Nethome Lancar" />
           </label>
           <div className="grid two">
             <label>Speed (Mbps)
-              <input type="number" min="0" value={form.speed_mbps} onChange={(e) => field('speed_mbps', e.target.value)} placeholder="100" />
+              <input type="number" min="0" value={form.speed_mbps} onChange={(e) => field('speed_mbps', e.target.value)} placeholder="200" />
             </label>
             <label>Price (IDR)
-              <input type="number" min="0" value={form.price_amount} onChange={(e) => field('price_amount', e.target.value)} placeholder="299000" />
+              <input type="number" min="0" value={form.price_amount} onChange={(e) => field('price_amount', e.target.value)} placeholder="116000" />
             </label>
           </div>
           <label>Promotion
-            <textarea value={form.promo_text} onChange={(e) => field('promo_text', e.target.value)} placeholder="Free installation, discount, bundle, etc." />
+            <textarea value={form.promo_text} onChange={(e) => field('promo_text', e.target.value)} placeholder="Discount, free installation, bundle, etc." />
           </label>
           <div className="grid two">
             <label>Valid until
@@ -414,8 +393,8 @@ export default function ReportForm() {
               <input value={form.contact_number} onChange={(e) => field('contact_number', e.target.value)} />
             </label>
           </div>
-          <label>OCR text
-            <textarea value={form.raw_ocr_text} onChange={(e) => field('raw_ocr_text', e.target.value)} placeholder="Raw text recognized from the poster" />
+          <label>Extracted text
+            <textarea value={form.raw_ocr_text} onChange={(e) => field('raw_ocr_text', e.target.value)} placeholder="Text detected from the poster" />
           </label>
           <label>Agent notes
             <textarea value={form.notes} onChange={(e) => field('notes', e.target.value)} placeholder="Anything else worth noting?" />
@@ -424,7 +403,7 @@ export default function ReportForm() {
 
         {error && <div className="error-box">{error}</div>}
         {saving && saveStage && <div className="ai-box">{saveStage}</div>}
-        <button className="button primary wide sticky-submit" disabled={saving}>{saving ? 'Submitting…' : aiBusy ? 'Submit while analysis runs' : 'Submit report'}</button>
+        <button className="button primary wide sticky-submit" disabled={saving}>{saving ? 'Submitting…' : aiBusy ? 'Submit while processing' : 'Submit report'}</button>
       </form>
     </section>
   )
