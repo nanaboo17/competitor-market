@@ -112,21 +112,26 @@ function parseOcrLocally(ocrText) {
 
   const speeds = [...ocrText.matchAll(/(\d{2,4})\s*(?:Mbps|Mpbs|Mb\/s)/gi)]
     .map((m) => Number(m[1]))
-    .filter((n) => Number.isFinite(n) && n >= 10)
+    .filter((n) => Number.isFinite(n) && n >= 10 && n <= 10000)
   if (speeds.length) result.speed_mbps = Math.min(...speeds)
 
-  const prices = [...ocrText.matchAll(/Rp\.?\s*([0-9][0-9.,]*)/gi)]
+  const prices = [...ocrText.matchAll(/Rp\.?\s*([0-9][0-9.,\s]*)/gi)]
     .map((m) => Number(m[1].replace(/[^0-9]/g, '')))
-    .filter((n) => Number.isFinite(n) && n >= 10000)
+    .filter((n) => Number.isFinite(n) && n >= 10000 && n <= 100000000)
   if (prices.length) result.price_amount = Math.min(...prices)
 
   const phoneMatch = ocrText.match(/(?:\+?62|0)\s*8\d{1,2}(?:[-.\s]?\d{3,4}){2,3}/)
-  if (phoneMatch) result.contact_number = phoneMatch[0].replace(/[^0-9+]/g, '')
+  if (phoneMatch) {
+    let phone = phoneMatch[0].replace(/[^0-9+]/g, '')
+    if (phone.startsWith('+62')) phone = '0' + phone.slice(3)
+    if (phone.startsWith('62')) phone = '0' + phone.slice(2)
+    result.contact_number = phone
+  }
 
-  const packageMatch =
-    ocrText.match(/\b(Paket\s+[^\n]{3,60})/i) ||
-    ocrText.match(/\b(Nethome\s+(?:Lancar|Ngebut|Sultan))\b/i) ||
-    ocrText.match(/\b(Biznet\s+Home\s+[0-9]+D)\b/i)
+  const nethomePackage = ocrText.match(/\b(Nethome\s+(?:Lancar|Ngebut|Sultan))\b/i)
+  const genericPackage = ocrText.match(/\b(Paket\s+[^\n]{3,60})/i)
+  const biznetPackage = ocrText.match(/\b(Biznet\s+Home\s+[0-9]+D)\b/i)
+  const packageMatch = nethomePackage || biznetPackage || genericPackage
   if (packageMatch) result.package_name = packageMatch[1].trim()
 
   const promoLines = ocrText
@@ -181,6 +186,26 @@ function extractModelPayload(response) {
   return null
 }
 
+function mergeMissing(target, fallback) {
+  const result = normalizeExtraction(target)
+  for (const key of [
+    'competitor_name',
+    'package_name',
+    'speed_mbps',
+    'price_amount',
+    'promo_text',
+    'valid_until',
+    'installation_fee',
+    'contract_months',
+    'contact_number',
+    'raw_ocr_text',
+  ]) {
+    if (result[key] == null || result[key] === '') result[key] = fallback[key] ?? result[key]
+  }
+  result.confidence = { ...(fallback.confidence || {}), ...(result.confidence || {}) }
+  return result
+}
+
 async function analyze(request, env) {
   if (request.method !== 'POST') {
     return json(request, { error: 'Method not allowed' }, { status: 405 })
@@ -199,12 +224,24 @@ async function analyze(request, env) {
     return json(request, { error: 'Workers AI binding is not configured' }, { status: 500 })
   }
 
+  const browserOcrText =
+    typeof body.ocr_text === 'string' && body.ocr_text.trim()
+      ? body.ocr_text.trim().slice(0, 12000)
+      : ''
+  const browserFallback = browserOcrText
+    ? parseOcrLocally(browserOcrText)
+    : normalizeExtraction({})
+
   const prompt = `Analyze this Indonesian fixed-broadband advertisement poster and extract only information that is clearly visible.
 
-Important rules:
+The browser OCR below is additional evidence. Correct obvious OCR mistakes using the image, but do not ignore useful text that the browser already recognized.
+
+BROWSER OCR:\n${browserOcrText || '(no browser OCR available)'}
+
+Rules:
 - Identify the ISP brand exactly as shown. Examples include Nethome.id, Biznet, IndiHome, MyRepublic, First Media, CBN, and ICONNET, but do not limit yourself to these brands.
 - If several packages are shown, use the lowest-priced entry package for package_name, speed_mbps, and price_amount.
-- Preserve the other visible package tiers in promo_text and raw_ocr_text.
+- Preserve other visible package tiers in promo_text and raw_ocr_text.
 - price_amount and installation_fee must be numeric IDR values without punctuation.
 - speed_mbps must be a number in Mbps.
 - valid_until must be YYYY-MM-DD only when explicitly visible.
@@ -223,7 +260,6 @@ Important rules:
           },
           { role: 'user', content: prompt },
         ],
-        // Workers AI vision expects the raw base64 payload, not the data URL prefix.
         image: extractBase64Image(body.image),
         response_format: {
           type: 'json_schema',
@@ -240,31 +276,39 @@ Important rules:
 
     let result = normalizeExtraction(extractModelPayload(visionResult))
 
-    // If structured generation still misses fields, parse any OCR text the model returned.
     if (result.raw_ocr_text) {
-      const fallback = parseOcrLocally(result.raw_ocr_text)
-      for (const key of [
-        'competitor_name',
-        'package_name',
-        'speed_mbps',
-        'price_amount',
-        'promo_text',
-        'contact_number',
-      ]) {
-        if (result[key] == null || result[key] === '') result[key] = fallback[key]
-      }
+      result = mergeMissing(result, parseOcrLocally(result.raw_ocr_text))
     }
 
-    // Never claim success with a meaningless object.
-    if (usefulFieldCount(result) === 0 && !result.raw_ocr_text) {
+    // Browser OCR is a deterministic safety net. If Gemma misses a field that
+    // Tesseract already saw, keep the Tesseract-derived value instead of null.
+    result = mergeMissing(result, browserFallback)
+
+    if (!result.raw_ocr_text && browserOcrText) result.raw_ocr_text = browserOcrText
+
+    return json(request, {
+      ...result,
+      _debug: {
+        model_fields: usefulFieldCount(normalizeExtraction(extractModelPayload(visionResult))),
+        final_fields: usefulFieldCount(result),
+        browser_ocr_supplied: Boolean(browserOcrText),
+      },
+    })
+  } catch (error) {
+    // Even when Workers AI fails, return useful deterministic extraction from
+    // browser OCR instead of throwing away already recognized poster data.
+    if (browserOcrText && usefulFieldCount(browserFallback) > 0) {
       return json(request, {
-        ...result,
-        _warning: 'AI returned no readable poster fields',
+        ...browserFallback,
+        _debug: {
+          model_fields: 0,
+          final_fields: usefulFieldCount(browserFallback),
+          browser_ocr_supplied: true,
+          ai_error: error instanceof Error ? error.message : 'AI extraction failed',
+        },
       })
     }
 
-    return json(request, result)
-  } catch (error) {
     return json(
       request,
       { error: error instanceof Error ? error.message : 'AI extraction failed' },
