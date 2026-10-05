@@ -34,13 +34,12 @@ const EXTRACTION_SCHEMA = {
   ],
 }
 
-
 function corsHeaders(request) {
   return {
     'Access-Control-Allow-Origin': request.headers.get('Origin') || '*',
     'Access-Control-Allow-Headers': 'authorization, content-type',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Vary': 'Origin',
+    Vary: 'Origin',
   }
 }
 
@@ -73,13 +72,6 @@ function extractBase64Image(value) {
   return match ? match[1] : value
 }
 
-function stripCodeFence(value) {
-  return value
-    .replace(/^\s*```(?:json)?\s*/i, '')
-    .replace(/\s*```\s*$/i, '')
-    .trim()
-}
-
 function normalizeExtraction(value) {
   const defaults = {
     competitor_name: null,
@@ -110,48 +102,83 @@ function normalizeExtraction(value) {
 function parseOcrLocally(ocrText) {
   const result = normalizeExtraction({ raw_ocr_text: ocrText })
 
-  const competitorMatch = ocrText.match(/\b(Biznet(?:\s+Home)?|IndiHome|MyRepublic|First\s+Media|CBN|ICONNET)\b/i)
-  if (competitorMatch) result.competitor_name = competitorMatch[1]
+  const competitorMatch = ocrText.match(
+    /\b(Nethome(?:\.id)?|Biznet(?:\s+Home)?|IndiHome|MyRepublic|First\s+Media|CBN|ICONNET)\b/i,
+  )
+  if (competitorMatch) {
+    const value = competitorMatch[1]
+    result.competitor_name = /nethome/i.test(value) ? 'Nethome.id' : value
+  }
 
-  const speeds = [...ocrText.matchAll(/(\d{2,4})\s*Mbps/gi)]
+  const speeds = [...ocrText.matchAll(/(\d{2,4})\s*(?:Mbps|Mpbs|Mb\/s)/gi)]
     .map((m) => Number(m[1]))
-    .filter((n) => Number.isFinite(n))
+    .filter((n) => Number.isFinite(n) && n >= 10)
   if (speeds.length) result.speed_mbps = Math.min(...speeds)
 
-  const prices = [...ocrText.matchAll(/Rp\s*([0-9][0-9.]{3,})/gi)]
-    .map((m) => Number(m[1].replace(/\./g, '')))
-    .filter((n) => Number.isFinite(n))
+  const prices = [...ocrText.matchAll(/Rp\.?\s*([0-9][0-9.,]*)/gi)]
+    .map((m) => Number(m[1].replace(/[^0-9]/g, '')))
+    .filter((n) => Number.isFinite(n) && n >= 10000)
   if (prices.length) result.price_amount = Math.min(...prices)
 
-  const phoneMatch = ocrText.match(/\b0\d{2,3}(?:[-\s]?\d{3,4}){2,3}\b/)
-  if (phoneMatch) result.contact_number = phoneMatch[0].replace(/\s+/g, '')
+  const phoneMatch = ocrText.match(/(?:\+?62|0)\s*8\d{1,2}(?:[-.\s]?\d{3,4}){2,3}/)
+  if (phoneMatch) result.contact_number = phoneMatch[0].replace(/[^0-9+]/g, '')
 
   const packageMatch =
-    ocrText.match(/(?:Paket\s+)?(Biznet\s+Home\s+[0-9]+D)\b/i) ||
-    ocrText.match(/\b(Paket\s+[^\n]{3,60})/i)
+    ocrText.match(/\b(Paket\s+[^\n]{3,60})/i) ||
+    ocrText.match(/\b(Nethome\s+(?:Lancar|Ngebut|Sultan))\b/i) ||
+    ocrText.match(/\b(Biznet\s+Home\s+[0-9]+D)\b/i)
   if (packageMatch) result.package_name = packageMatch[1].trim()
 
   const promoLines = ocrText
     .split(/\n+/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .filter((line) => /promo|gratis|bundling|hemat|langganan|discount|diskon/i.test(line))
-
-  const durationPromos = [...ocrText.matchAll(/(?:langganan\s*)?(\d{1,2})\s*bulan[^\n,.]*?gratis\s*(\d{1,2})\s*bulan/gi)]
-    .map((m) => `Langganan ${m[1]} bulan Gratis ${m[2]} bulan`)
-
-  const promoParts = [...new Set([...promoLines, ...durationPromos])]
-  if (promoParts.length) result.promo_text = promoParts.join(' | ')
-
-  const confidence = {}
-  if (result.competitor_name) confidence.competitor_name = 0.9
-  if (result.package_name) confidence.package_name = 0.75
-  if (result.speed_mbps != null) confidence.speed_mbps = 0.9
-  if (result.price_amount != null) confidence.price_amount = 0.9
-  if (result.contact_number) confidence.contact_number = 0.9
-  result.confidence = confidence
+    .filter((line) => /promo|gratis|free|bundling|hemat|diskon|discount|bonus|bulan/i.test(line))
+  if (promoLines.length) result.promo_text = [...new Set(promoLines)].join(' | ')
 
   return result
+}
+
+function usefulFieldCount(value) {
+  return [
+    value.competitor_name,
+    value.package_name,
+    value.speed_mbps,
+    value.price_amount,
+    value.promo_text,
+    value.valid_until,
+    value.installation_fee,
+    value.contract_months,
+    value.contact_number,
+  ].filter((item) => item !== null && item !== undefined && item !== '').length
+}
+
+function extractModelPayload(response) {
+  const parsed = response?.choices?.[0]?.message?.parsed
+  if (parsed && typeof parsed === 'object') return parsed
+
+  const candidate =
+    response?.response ??
+    response?.choices?.[0]?.message?.content ??
+    response?.result ??
+    response
+
+  if (candidate && typeof candidate === 'object') return candidate
+
+  if (typeof candidate === 'string') {
+    const clean = candidate
+      .replace(/^\s*```(?:json)?\s*/i, '')
+      .replace(/\s*```\s*$/i, '')
+      .trim()
+
+    try {
+      return JSON.parse(clean)
+    } catch {
+      return parseOcrLocally(clean)
+    }
+  }
+
+  return null
 }
 
 async function analyze(request, env) {
@@ -172,46 +199,18 @@ async function analyze(request, env) {
     return json(request, { error: 'Workers AI binding is not configured' }, { status: 500 })
   }
 
-  const prompt = `
-Analyze this Indonesian telecom or fixed-broadband competitor advertisement image.
+  const prompt = `Analyze this Indonesian fixed-broadband advertisement poster and extract only information that is clearly visible.
 
-Perform OCR and extract ONLY information that is visible in the image. Do not infer missing values.
-
-Return ONLY valid JSON with exactly these fields:
-{
-  "competitor_name": string|null,
-  "package_name": string|null,
-  "speed_mbps": number|null,
-  "price_amount": number|null,
-  "promo_text": string|null,
-  "valid_until": "YYYY-MM-DD"|null,
-  "installation_fee": number|null,
-  "contract_months": number|null,
-  "contact_number": string|null,
-  "raw_ocr_text": string|null,
-  "confidence": {
-    "competitor_name": number,
-    "package_name": number,
-    "speed_mbps": number,
-    "price_amount": number,
-    "promo_text": number,
-    "valid_until": number,
-    "installation_fee": number,
-    "contract_months": number,
-    "contact_number": number
-  }
-}
-
-Rules:
+Important rules:
+- Identify the ISP brand exactly as shown. Examples include Nethome.id, Biznet, IndiHome, MyRepublic, First Media, CBN, and ICONNET, but do not limit yourself to these brands.
+- If several packages are shown, use the lowest-priced entry package for package_name, speed_mbps, and price_amount.
+- Preserve the other visible package tiers in promo_text and raw_ocr_text.
 - price_amount and installation_fee must be numeric IDR values without punctuation.
-- speed_mbps must be Mbps.
-- confidence values must be between 0 and 1.
-- Use null when a field is not clearly visible.
-- If the poster contains multiple package tiers, use the lowest-priced/entry package for package_name, speed_mbps, and price_amount.
-- Put the other visible package tiers and prices into promo_text so no useful offer data is lost.
-- raw_ocr_text should contain all important readable text from the poster, including all package tiers and contact information.
-- Do not include markdown fences or commentary.
-`.trim()
+- speed_mbps must be a number in Mbps.
+- valid_until must be YYYY-MM-DD only when explicitly visible.
+- Do not invent installation fees, contract periods, or validity dates.
+- raw_ocr_text should contain the important readable poster text.
+- confidence values must be between 0 and 1.`
 
   try {
     const visionResult = await env.AI.run(
@@ -220,27 +219,17 @@ Rules:
         messages: [
           {
             role: 'system',
-            content: 'You extract fields from Indonesian internet-provider advertisement posters. Read the image carefully. Do not infer information that is not visible. Return concise plain text only.',
+            content: 'You are a precise OCR and structured-data extraction assistant for Indonesian telecom advertisements.',
           },
-          {
-            role: 'user',
-            content: `Read this poster and return exactly these lines:
-COMPETITOR: <brand or blank>
-PACKAGE: <entry/lowest-priced package name or blank>
-SPEED_MBPS: <entry package speed number only or blank>
-PRICE_IDR: <entry package price number only, no punctuation, or blank>
-PROMOTION: <all visible promo/bundling details in one line or blank>
-VALID_UNTIL: <YYYY-MM-DD only if explicitly shown, otherwise blank>
-INSTALLATION_FEE_IDR: <number only if explicitly shown, otherwise blank>
-CONTRACT_MONTHS: <single mandatory contract length only if clearly shown, otherwise blank>
-CONTACT: <visible phone/WhatsApp number or blank>
-OCR: <important visible text, including all package tiers and prices>
-
-If several packages are shown, choose the lowest-priced package for PACKAGE, SPEED_MBPS, and PRICE_IDR, but keep all other package tiers in OCR and PROMOTION where relevant.`,
-          },
+          { role: 'user', content: prompt },
         ],
-        image: body.image,
-        max_tokens: 900,
+        // Workers AI vision expects the raw base64 payload, not the data URL prefix.
+        image: extractBase64Image(body.image),
+        response_format: {
+          type: 'json_schema',
+          json_schema: EXTRACTION_SCHEMA,
+        },
+        max_completion_tokens: 1200,
         temperature: 0.1,
         chat_template_kwargs: {
           enable_thinking: false,
@@ -249,56 +238,29 @@ If several packages are shown, choose the lowest-priced package for PACKAGE, SPE
       { rejectIfBusy: true },
     )
 
-    const candidate =
-      visionResult?.response ??
-      visionResult?.choices?.[0]?.message?.content ??
-      visionResult?.result ??
-      ''
+    let result = normalizeExtraction(extractModelPayload(visionResult))
 
-    const text =
-      typeof candidate === 'string'
-        ? candidate.trim()
-        : JSON.stringify(candidate ?? '')
-
-    if (!text) {
-      return json(request, normalizeExtraction({}))
+    // If structured generation still misses fields, parse any OCR text the model returned.
+    if (result.raw_ocr_text) {
+      const fallback = parseOcrLocally(result.raw_ocr_text)
+      for (const key of [
+        'competitor_name',
+        'package_name',
+        'speed_mbps',
+        'price_amount',
+        'promo_text',
+        'contact_number',
+      ]) {
+        if (result[key] == null || result[key] === '') result[key] = fallback[key]
+      }
     }
 
-    const lineValue = (key) => {
-      const match = text.match(new RegExp(`^${key}\\s*:\\s*(.*)$`, 'im'))
-      return match ? match[1].trim() : ''
-    }
-
-    const numberValue = (key) => {
-      const raw = lineValue(key).replace(/[^0-9]/g, '')
-      return raw ? Number(raw) : null
-    }
-
-    const result = normalizeExtraction({
-      competitor_name: lineValue('COMPETITOR') || null,
-      package_name: lineValue('PACKAGE') || null,
-      speed_mbps: numberValue('SPEED_MBPS'),
-      price_amount: numberValue('PRICE_IDR'),
-      promo_text: lineValue('PROMOTION') || null,
-      valid_until: lineValue('VALID_UNTIL') || null,
-      installation_fee: numberValue('INSTALLATION_FEE_IDR'),
-      contract_months: numberValue('CONTRACT_MONTHS'),
-      contact_number: lineValue('CONTACT') || null,
-      raw_ocr_text: lineValue('OCR') || text,
-      confidence: {},
-    })
-
-    // Fallback to generic local parsing if the model misses any easy fields.
-    const fallback = parseOcrLocally(result.raw_ocr_text || text)
-    for (const key of [
-      'competitor_name',
-      'package_name',
-      'speed_mbps',
-      'price_amount',
-      'promo_text',
-      'contact_number',
-    ]) {
-      if (result[key] == null || result[key] === '') result[key] = fallback[key]
+    // Never claim success with a meaningless object.
+    if (usefulFieldCount(result) === 0 && !result.raw_ocr_text) {
+      return json(request, {
+        ...result,
+        _warning: 'AI returned no readable poster fields',
+      })
     }
 
     return json(request, result)
