@@ -11,12 +11,20 @@ function textOrDash(value: string | null | undefined) {
   return value && value.trim() ? value : '—'
 }
 
+function whatsappNumber(value: string | null) {
+  if (!value) return ''
+  const digits = value.replace(/\D/g, '')
+  if (digits.startsWith('0')) return '62' + digits.slice(1)
+  return digits
+}
+
 export default function ReportDetail() {
   const { id } = useParams()
   const [report, setReport] = useState<Report | null>(null)
   const [photoUrl, setPhotoUrl] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [copied, setCopied] = useState('')
 
   useEffect(() => {
     if (!id) {
@@ -65,6 +73,28 @@ export default function ReportDetail() {
     [report],
   )
 
+  async function copy(value: string, label: string) {
+    await navigator.clipboard.writeText(value)
+    setCopied(label)
+    window.setTimeout(() => setCopied(''), 1400)
+  }
+
+  async function copySummary() {
+    if (!report) return
+    const summary = [
+      'Competitor: ' + brand,
+      'Package: ' + textOrDash(report.package_name),
+      'Speed: ' + (report.speed_mbps ? report.speed_mbps + ' Mbps' : '—'),
+      'Price: ' + money(report.price_amount),
+      'Promo: ' + textOrDash(report.promo_text),
+      'Contact: ' + textOrDash(report.contact_number),
+      'Location: ' + report.latitude + ', ' + report.longitude,
+      'Captured: ' + new Date(report.captured_at || report.created_at).toLocaleString('id-ID'),
+    ].join('\n')
+
+    await copy(summary, 'summary')
+  }
+
   if (loading) return <div className="empty-card skeleton-card">Loading report…</div>
 
   if (error || !report) {
@@ -79,6 +109,8 @@ export default function ReportDetail() {
     )
   }
 
+  const wa = whatsappNumber(report.contact_number)
+
   return (
     <section>
       <div className="detail-topbar">
@@ -91,6 +123,13 @@ export default function ReportDetail() {
         <span className={'status ' + report.ai_status}>{report.ai_status.replace('_', ' ')}</span>
       </div>
 
+      <div className="detail-action-bar">
+        <button type="button" className="button ghost small" onClick={copySummary}>{copied === 'summary' ? 'Copied!' : 'Copy summary'}</button>
+        <button type="button" className="button ghost small" onClick={() => copy(report.latitude + ', ' + report.longitude, 'gps')}>{copied === 'gps' ? 'GPS copied!' : 'Copy GPS'}</button>
+        {wa && <a className="button ghost small" href={'https://wa.me/' + wa} target="_blank" rel="noreferrer">WhatsApp ↗</a>}
+        {report.contact_number && <a className="button ghost small" href={'tel:' + report.contact_number}>Call</a>}
+      </div>
+
       <div className="detail-layout">
         <div className="detail-main">
           <div className="panel report-photo-panel">
@@ -99,7 +138,9 @@ export default function ReportDetail() {
               <span className="meta">Private image</span>
             </div>
             {photoUrl ? (
-              <img className="report-photo" src={photoUrl} alt={'Competitor poster for ' + brand} />
+              <a href={photoUrl} target="_blank" rel="noreferrer" className="report-photo-link" title="Open full image">
+                <img className="report-photo" src={photoUrl} alt={'Competitor poster for ' + brand} />
+              </a>
             ) : (
               <div className="empty-state compact">
                 <strong>Photo unavailable</strong>
@@ -134,7 +175,7 @@ export default function ReportDetail() {
           </div>
 
           <details className="panel detail-disclosure">
-            <summary>OCR text</summary>
+            <summary>Extracted text</summary>
             <pre>{textOrDash(report.raw_ocr_text)}</pre>
           </details>
         </div>
